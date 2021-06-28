@@ -1,0 +1,136 @@
+---
+title: "twitter"
+author: "Brenden Latham"
+date: "6/23/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("tidyverse")
+library("ggplot2")
+library("tidytext")
+library("gtools")
+```
+
+# Vaccine Sentiment Analysis
+
+## Initial Data
+1,998,849 tweets containing the word "vaccine" posted since January 1st, 2020 were scraped from twitter using Twint.
+
+To install and run twint in linux:
+
+conda install twint
+
+twint -s vaccine --since 2020-1-1 --until 2021-6-14 --csv -o vaccine_mentions.csv 
+
+## Would scraping for hashtags yield better results?
+
+The data will be brought into Rstudio and a list of hashtags used in conjunction with the word "vaccine" will be produced in order to determine if hashtags are a better metric for scrapping.
+
+```{r load}
+vac_mentions <- read.csv("~/twitter/vaccine_mentions.csv", sep = "\t", encoding = "UTF-8") ## edit path to file
+```
+
+```{r}
+head(vac_mentions,1)
+```
+
+Twint formats all hashtags in a tweet as an array so some cleaning is necessary.
+
+In the first step of cleaning a list in the form of a large character will be made.
+
+```{r tags1}
+hashtags <- vac_mentions %>% filter(language == "en") %>% select("hashtags") ## creating data frame with only english hashtags
+hashtags <- hashtags[!(hashtags$hashtags=="[]"),] ## deleting rows containing what Twint gives as a NULL value
+hashtags <- as.vector(unlist(strsplit(hashtags,",")),mode="list") ## splitting each hashtag into it's own element in a list
+hashtags <- str_replace_all(hashtags, "[^[:alnum:]]", "") ## deleting all special characters
+hashlist <- unique(hashtags) ## making list of unique hashtags
+hashlist <- paste0("#", hashlist) ## putting it in hashtag format
+head(hashlist)
+```
+
+In the second step a frequency table of hashtag use will be made and saved as a dataframe.
+
+```{r tags2}
+hashframe <- hashtags ## createing another list with only hashtags
+hashframe <- paste0("#", hashframe) ## putting it in hashtag format
+hashframe <- as.data.frame(hashframe) ## converting it back to data frame
+hash_count <- plyr::count(hashframe$hashframe) ## creating frequency table
+hash_count <- hash_count[order(-hash_count$freq),] ## ordering it by most occurring
+head(hash_count)
+#write.csv
+```
+
+A graph reprsenting this data is shown below.
+
+```{r tagplot}
+boxplot(hash_count$freq, main = "frequency of hashtags", xlab = "hashtags", ylab = "frequency")
+```
+
+It is evident that there are outliers in the hashtags, with the furthest being a hashtag not necessarily always pertaining to a vaccine.
+
+Now the number of tweets gathered with no hashtags will be shows.
+
+```{r nulltags1}
+null_count <- plyr::count(vac_mentions$hashtags) # making frame with NULLS included
+head(null_count[order(-null_count$freq),]) # ordering frame to see nuber of NULLS
+```
+
+These results reveal that hashtags are not a reliable metric to use when scraping for tweets pertaining to a vaccine, and further scraping using hashtags as keywords would likely result in problems when analysing tweet sentiment.
+
+Using the database of tweets containing "vaccine" has been ruled to be the best method of analyzing the current public opinion on the covid vaccine and vaccines in general.
+
+Analysis will move forward using the dataframe of vaccine mentions.
+
+## User
+
+The use of the word vaccine in relation to user will now be analyzed.
+
+```{r usercount}
+user_freq <- plyr::count(vac_mentions$username) # getting frequency of users
+head(user_freq[order(-user_freq$freq),]) # ordering by most frequent
+```
+
+```{r userplot}
+boxplot(user_freq$freq, main = "tweets per user pertaining to vaccine", xlab = "user", ylab = "frequency")
+```
+
+The mean will be calculated below.
+
+```{r meantweets}
+mean(user_freq$freq)
+```
+
+Of twitter users that have tweeted the word "vaccine" one time, the mean amount of tweets containing the word vaccine is approximately 2.28 with the highest outlier being 14,724.
+
+The usernames of the top tweeters indicate bot accounts.
+
+The users will now be split into a large list of individual databases containing all tweets for that user.
+
+```{r}
+users_split <- split(vac_mentions,f = vac_mentions$username) # splitting users into individual dataframes within a list
+```
+
+The first six tweets from the top tweeter will be shown below
+
+```{r}
+head(users_split[["vaccineedgar"]][["tweet"]]) # examining the top tweeter
+```
+
+Now some tweets will be shown from a slightly different type of account
+
+```{r}
+head(users_split[["001_venom"]][["tweet"]]) # examining another user
+```
+
+The links contained in these posts lead to various anti-vaccine videos and images.
+
+There is a noticeable difference between the amount of hashtag spam between these two posts. Level of hashtag spam might be useful in determining the purpose of the tweet
+
+The average number of hashtags used by each user will be evaluated.
+
+```{r}
+
+```
+
