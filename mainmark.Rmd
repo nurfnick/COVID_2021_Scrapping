@@ -1,0 +1,305 @@
+---
+title: "twitter"
+author: "Brenden Latham"
+date: "6/23/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("tidyverse")
+library("ggplot2")
+library("tidytext")
+library("gtools")
+library("data.table")
+library("wordcloud")
+```
+
+# Vaccine Sentiment Analysis
+
+## Initial Data
+1,998,849 tweets containing the word "vaccine" posted since January 1st, 2020 were scraped from twitter using Twint.
+
+To install and run twint in linux:
+
+conda install twint
+
+twint -s vaccine --since 2020-1-1 --until 2021-6-14 --csv -o vaccine_mentions.csv 
+
+## Would scraping for hashtags yield better results?
+
+The data will be brought into Rstudio and a list of hashtags used in conjunction with the word "vaccine" will be produced in order to determine if hashtags are a better metric for scrapping.
+
+```{r load}
+vac_mentions <- fread(file = "~/twitter/vaccine_mentions.csv", sep = "\t", encoding = "UTF-8") ## edit path to file
+```
+
+Twint formats all hashtags in a tweet as an array so some cleaning is necessary.
+
+In the first step of cleaning a list in the form of a large character will be made.
+
+```{r tags1}
+# creating frame with only english hashtags
+hashtags <- vac_mentions %>% filter(language == "en") %>% select("hashtags")
+# deleting rows containing what Twint gives as a NULL value
+hashtags <- hashtags[!(hashtags$hashtags=="[]"),]
+# splitting each hashtag into it's own element in a list
+hashtags <- as.vector(unlist(strsplit(hashtags,",")),mode="list")
+# deleting all special characters
+hashtags <- str_replace_all(hashtags, "[^[:alnum:]]", "")
+# making list of unique hashtags
+hashlist <- unique(hashtags) 
+# putting it in hashtag format
+hashlist <- paste0("#", hashlist)
+head(hashlist)
+```
+
+
+individual hashtag frequency will now be examined
+
+```{r}
+hashtags <- paste0("#", hashtags)
+hashtags <- as.data.table(plyr::count(hashtags))
+hashtags <- hashtags[order(-hashtags$freq),]
+head(hashtags)
+```
+
+A graph reprsenting this data is shown below.
+
+```{r tagplot}
+boxplot(hashtags$freq, main = "frequency of hashtags", xlab = "hashtags", ylab = "frequency")
+```
+
+It is evident that there are outliers in the hashtags, with the furthest being a hashtag not necessarily always pertaining to a vaccine.
+
+A wordcloud will give better representation of this.
+
+```{r}
+wordcloud(words = hashtags$x, freq = hashtags$freq, max.words = 75, random.order = FALSE, rot.per = 0.35, colors = brewer.pal(8, "Dark2"))
+```
+
+Now the number of tweets gathered with no hashtags will be shown.
+
+```{r nulltags1}
+# making frame with NULLS included
+null_count <- as.data.table(plyr::count(vac_mentions$hashtags))
+# ordering frame to see number of NULLS
+head(null_count[order(-null_count$freq),],1)
+```
+
+These results reveal that while possibly useful for analysis, hashtags are not a reliable metric to use when scraping for tweets pertaining to a vaccine, and further scraping using hashtags as keywords would likely result in problems when analyzing tweet sentiment.
+
+Using the database of tweets containing "vaccine" has been ruled to be the best method of analyzing the current public opinion on the covid vaccine and vaccines in general.
+
+Analysis will move forward using the current data table of vaccine mentions.
+
+## analysis
+
+A smaller table will be made containing only the variables expected to be used for analysis. 
+
+Various grouped tables will also be made.
+
+```{r}
+main <- as.data.table(vac_mentions) %>% select("username", "tweet", "hashtags")
+tag_group <- as.data.table(main) %>% group_by(hashtags)
+user_group <- as.data.table(main) %>% group_by(username)
+```
+
+## hashtags used together
+
+Before moving on with user analysis, the 25 most common combinations of hashtags will be examined.
+
+```{r}
+head(tally(tag_group, sort = TRUE),25)
+```
+
+The first three lines show information already known however the fourth shows that #covid19, #vaccine, and #miami were used in the same tweet 1900 times.
+
+It must be noted that his is almost 400 times more often than a combination of #covid19 and #vaccine.
+
+The use of the word vaccine in relation to user will now be analyzed.
+
+The top 25 users of the word vaccine will be shown below and the tally for the whole table will be saved for use later
+
+```{r}
+head(tally(user_group, sort = TRUE),25)
+total_tweets <- as.vector(tally(user_group)$n)
+```
+
+A plot showing this data for all users will be made.
+
+```{r userplot}
+boxplot(tally(user_group)$n, main = "tweets per user pertaining to vaccine", xlab = "user", ylab = "frequency")
+```
+
+The mean will be calculated below.
+
+```{r meantweets}
+mean(tally(user_group)$n)
+```
+
+Of twitter users that have tweeted the word "vaccine" one time, the mean amount of tweets containing the word vaccine is approximately 2.28 with the highest outlier being 14,724.
+
+The usernames of the top tweeters indicate bot accounts.
+
+The hashtag combinations used by the top 25 users will be shown.
+
+```{r}
+top_users <- head(tally(user_group, sort = TRUE),25) %>% select("username")
+top_users <- as.vector(top_users$username)
+for (i in top_users[1:5]) {
+  result <- as.data.table(c(i, count(main[main$username == i], hashtags)))
+  print(result)
+}
+rm(result)
+```
+
+Here we can see where all the combinations of #covid19, #vaccine, and #miami came from.
+
+All hashtags will now be summarized to their user.
+
+```{r}
+users <- as.data.table(user_group %>% summarize(tags = paste(sort(unique(hashtags)),collapse=",")))
+```
+
+The average hashtags per tweet for each user will now be extracted along with the total tags.
+
+```{r}
+# R handles this loop well but runs through making the vector twice. Lopping the second half off later is much faster
+ave_tags <- as.numeric(vector())
+total_tags <- as.numeric(vector())
+for (i in users) {
+  tags <- str_count(users$tags,"'")
+  tags <- tags/2
+  total_tags <- append(total_tags, tags)
+  tags <- tags/tally(user_group)$n
+  ave_tags <- append(ave_tags, tags)
+}
+# now to take that second repeating half off
+true_len <- length(users$username)
+total_tags <- total_tags[1:true_len]
+ave_tags <- ave_tags[1:true_len]
+rm(true_len)
+rm(tags)
+head(total_tags,25)
+head(ave_tags,25)
+```
+A plot of the average tags per tweet can be seen below
+
+```{r}
+boxplot(ave_tags, main = "average tags per tweet for each user", xlab = "user", ylab = "average")
+```
+
+The mean will be calculated
+
+```{r}
+mean(ave_tags)
+```
+
+A new data table will be built with gathered data
+
+```{r}
+users$total_tweets <- total_tweets
+users$total_tags <- total_tags
+users$ave_tags <- ave_tags
+user_stats <- users %>% select(username, total_tweets, total_tags, ave_tags)
+```
+
+The first 25 rows are seen below
+
+```{r}
+head(user_stats,25)
+```
+
+The users with the highest average tags will be examined.
+
+```{r}
+top_ave_tags <- head(user_stats[order(-user_stats$ave_tags)],100)
+head(top_ave_tags,25)
+```
+
+Our top tweeters will be examined within this table and the top users vector will be modified as a table with their stats
+
+```{r}
+top_users <- user_stats[user_stats$username %in% top_users]
+top_users <- top_users[order(-top_users$total_tweets),]
+top_users
+```
+
+```{r}
+barplot(top_users$total_tweets, main = "total tweets of top users", ylab = "tweets", xlab = "user")
+```
+
+```{r}
+barplot(top_users$total_tags, main = "total tags used by top users", ylab = "tags", xlab = "user")
+```
+
+```{r}
+barplot(top_users$ave_tags, main = "average tags per tweet of top users", ylab = "tags/tweet", xlab = "user")
+```
+
+A word cloud for the top users will now be made.
+
+```{r}
+top_user_words <- main[main$username %in% top_users$username] %>% select(username, tweet)
+top_user_words <- unlist(strsplit(top_user_words$tweet," "))
+top_user_words <- plyr::count(top_user_words)
+top_user_words <- top_user_words[order(-top_user_words$freq),]
+head(top_user_words)
+```
+
+The top row will be cleaned
+
+```{r}
+top_user_words <- top_user_words[-c(1),]
+head(top_user_words)
+```
+
+A word cloud for the top users will now be built
+
+```{r}
+wordcloud(words = top_user_words$x, freq = top_user_words$freq, max.words = 75, random.order = FALSE, rot.per = 0.35, colors = brewer.pal(8, "Dark2"))
+```
+
+It is worth noting that the link appearing in the word cloud leads to a California Department of Public Health page for finding open vaccine appointments
+
+This will now be compared to a random sample of all tweets
+
+```{r}
+set.seed(123)
+rand_tweets <- sample(main$tweet, 100000) 
+rand_tweets <- unlist(strsplit(rand_tweets," "))
+rand_tweets <- plyr::count(rand_tweets)
+rand_tweets <- rand_tweets[order(-rand_tweets$freq),]
+rand_tweets <- rand_tweets[-c(2),]
+head(rand_tweets,25)
+```
+
+As can be expected, the most frequent words for all tweets are filler words that have no meaning by themselves.
+
+This is different from the most frequent words tweeted by the top tweeters in that the top tweeter's most frequent words had a clear subject without the need to look at surrounding words.
+
+Lastly this process will be completed for the tweets by the users with the most hashtags per tweet.
+
+```{r}
+top_ave_tags_words <- main[main$username %in% top_ave_tags$username] %>% select(username, tweet)
+top_ave_tags_words <- unlist(strsplit(top_ave_tags_words$tweet," "))
+top_ave_tags_words <- plyr::count(top_ave_tags_words)
+top_ave_tags_words <- top_ave_tags_words[order(-top_ave_tags_words$freq),]
+# deleting row for space freq
+top_ave_tags_words <- top_ave_tags_words[-c(1),]
+# we wish to look at words instead of hashtags again so all rows for tag frequency will be deleted
+top_ave_tags_words <- top_ave_tags_words[!grepl("#", top_ave_tags_words$x),]
+# deleting row for comma freq
+top_ave_tags_words <- top_ave_tags_words[-c(1),]
+head(top_ave_tags_words,25)
+```
+
+```{r}
+wordcloud(words = top_ave_tags_words$x, freq = top_ave_tags_words$freq, max.words = 75, random.order = FALSE, rot.per = 0.35, colors = brewer.pal(8, "Dark2"))
+```
+
+Many of the most frequent words used here are tags to other users and seem to be more politically involved than the words from the most frequent tweeters.
+
+The link at the bottom of the word cloud leads to an nbc news article about the former first lady getting a covid vaccine.
+
