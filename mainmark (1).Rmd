@@ -1,0 +1,468 @@
+---
+title: "The View On Vaccines"
+author: "Brenden Latham"
+date: "6/23/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("tidyverse")
+library("ggplot2")
+library("tidytext")
+library("gtools")
+library("data.table")
+library("wordcloud")
+library("textdata")
+```
+
+# Vaccine Sentiment Analysis
+
+## Abstract
+
+This research aims to provide a better understanding of the sentiment of the public towards the Covid19 vaccine and vaccines in general since January 1st, 2020. The data was gathered using Twint, an open source intelligence tool. Two million tweets containing the word "vaccine" were then analyzed in R by common characteristics such as user, hashtag use, and word sentiment when compared to the textdata package "Sentiment" corpus. Analysis and statistical tests showed significant differences in tweet sentiment between subsets of active users and the general population.
+
+## Initial Data
+
+1,998,849 tweets containing the word "vaccine" posted since January 1st, 2020 were scraped from twitter using Twint.
+
+The data used can be obtained through the link below.
+
+https://drive.google.com/file/d/17Hhe9ZvsmxYEid32lSlIFtnL6CQwhsiO/view?usp=sharing
+
+## Would scraping for hashtags yield better results?
+
+The data will now be imported into Rstudio and a list of hashtags used in conjunction with the word "vaccine" will be produced in order to determine if hashtags are a better metric for scrapping.
+
+```{r load}
+vac_mentions <- fread(file = "~/twitter/vaccine_mentions.csv", sep = "\t", encoding = "UTF-8") ## edit path to file
+```
+
+Twint formats all hashtags in a tweet as an array so some cleaning is necessary.
+
+In the first step of cleaning, a list in the form of a large character will be made.
+
+```{r tags1}
+# creating frame with only english hashtags
+hashtags <- vac_mentions %>% filter(language == "en") %>% select("hashtags")
+# deleting rows containing what Twint gives as a NULL value
+hashtags <- hashtags[!(hashtags$hashtags=="[]"),]
+# splitting each hashtag into it's own element in a list
+hashtags <- as.vector(unlist(strsplit(hashtags,",")),mode="list")
+# deleting all special characters
+hashtags <- str_replace_all(hashtags, "[^[:alnum:]]", "")
+# making list of unique hashtags
+hashlist <- unique(hashtags) 
+# putting it in hashtag format
+hashlist <- paste0("#", hashlist)
+head(hashlist)
+```
+
+
+Individual hashtag frequency will now be examined.
+
+```{r}
+hashtags <- paste0("#", hashtags)
+hashtags <- as.data.table(plyr::count(hashtags))
+hashtags <- hashtags[order(-hashtags$freq),]
+head(hashtags)
+```
+
+A graph representing this data is shown below.
+
+```{r tagplot}
+boxplot(hashtags$freq, main = "frequency of hashtags", xlab = "hashtags", ylab = "frequency")
+```
+
+It is evident that there are outliers in the hashtags, with the furthest being a hashtag not necessarily always pertaining to a vaccine.
+
+A wordcloud for the words in this data will be shown
+
+```{r}
+wordcloud(words = hashtags$x, freq = hashtags$freq, max.words = 75, random.order = FALSE, rot.per = 0.35, colors = brewer.pal(8, "Dark2"))
+```
+
+Now the number of tweets gathered with no hashtags will be shown.
+
+```{r nulltags1}
+# making frame with NULLS included
+null_count <- as.data.table(plyr::count(vac_mentions$hashtags))
+# ordering frame to see number of NULLS
+head(null_count[order(-null_count$freq),],1)
+```
+
+These results reveal that while possibly useful for analysis, hashtags are not a reliable metric to use when scraping for tweets pertaining to a vaccine, and further scraping using hashtags as keywords would likely result in problems when analyzing tweet sentiment.
+
+Using the database of tweets containing "vaccine" has been ruled to be the best method of analyzing the current public opinion on the topic.
+
+Analysis will move forward using the current data table of vaccine mentions.
+
+## Analysis
+
+A smaller table will be made containing only the variables expected to be used for analysis. 
+
+Various grouped tables will also be made.
+
+```{r}
+main <- as.data.table(vac_mentions) %>% select("username", "tweet", "hashtags")
+tag_group <- as.data.table(main) %>% group_by(hashtags)
+user_group <- as.data.table(main) %>% group_by(username)
+```
+
+### Hashtags Use
+
+Before moving on with user analysis, the 10 most common combinations of hashtags will be examined.
+
+```{r}
+tally(tag_group, sort = TRUE)[1:10,]
+```
+
+The first three lines show information already known, however the fourth shows that #covid19, #vaccine, and #miami were used in the same tweet 1900 times.
+
+It must be noted that this occurs almost 400 more times than a combination of #covid19 and #vaccine.
+
+### "Vaccine" Use
+
+The use of the word vaccine in relation to user will now be analyzed.
+
+The top 10 users of the word vaccine will be shown below.
+
+```{r}
+tally(user_group, sort = TRUE)[1:10,]
+total_tweets <- as.vector(tally(user_group)$n)
+```
+
+A plot showing this data for all users will be made.
+
+```{r userplot}
+boxplot(tally(user_group)$n, main = "tweets per user pertaining to vaccine", xlab = "user", ylab = "frequency")
+```
+
+The mean will be calculated below.
+
+```{r meantweets}
+mean(tally(user_group)$n)
+```
+
+Of twitter users that have tweeted the word "vaccine" one time, the mean number of tweets containing the word vaccine is approximately 2.28 with the highest outlier being 14,724.
+
+The usernames of the top tweeters indicate bot accounts.
+
+### Tag Use of Top "Vaccine" Users 
+
+The hashtag combinations used by 10 of the top 25 users will be shown.
+
+```{r}
+top_users <- head(tally(user_group, sort = TRUE),25) %>% select("username")
+top_users <- as.vector(top_users$username)
+for (i in top_users[1:10]) {
+  result <- as.data.table(c(i, count(main[main$username == i], hashtags)))
+  print(result)
+}
+rm(result)
+```
+
+Here we can see where all the combinations of #covid19, #vaccine, and #miami came from.
+
+### User Stats
+
+All hashtags will now be summarized to their user.
+
+```{r}
+users <- as.data.table(user_group %>% summarize(tags = paste(sort(unique(hashtags)),collapse=",")))
+```
+
+The average hashtags per tweet for each user will now be extracted along with the total tags.
+
+```{r}
+# R handles this loop well but runs through making the vector twice. Lopping the second half off later is much faster
+ave_tags <- as.numeric(vector())
+total_tags <- as.numeric(vector())
+for (i in users) {
+  tags <- str_count(users$tags,"'")
+  tags <- tags/2
+  total_tags <- append(total_tags, tags)
+  tags <- tags/tally(user_group)$n
+  ave_tags <- append(ave_tags, tags)
+}
+# now to take that second repeating half off
+true_len <- length(users$username)
+total_tags <- total_tags[1:true_len]
+ave_tags <- ave_tags[1:true_len]
+rm(true_len)
+rm(tags)
+head(total_tags,25)
+head(ave_tags,25)
+```
+
+A plot of the average tags per tweet can be seen below
+
+```{r}
+boxplot(ave_tags, main = "average tags per tweet for each user", xlab = "user", ylab = "average")
+```
+
+The mean tags per tweet will be calculated
+
+```{r}
+mean(ave_tags)
+```
+
+A new data table will be built with data gathered thus far
+
+```{r}
+users$total_tweets <- total_tweets
+users$total_tags <- total_tags
+users$ave_tags <- ave_tags
+user_stats <- users %>% select(username, total_tweets, total_tags, ave_tags)
+```
+
+The first 25 rows are seen below
+
+```{r}
+user_stats[1:25,]
+```
+
+### Comparing Groups
+
+The users with the highest average tags will be examined.
+
+```{r}
+top_ave_tags <- head(user_stats[order(-user_stats$ave_tags)],1000)
+top_ave_tags[1:25,]
+```
+
+The top tweeters will be examined again within this table and the top users vector will be modified as a separate table with their stats and will be plotted
+
+```{r}
+top_users <- user_stats[user_stats$username %in% top_users]
+top_users <- top_users[order(-top_users$total_tweets),]
+top_users
+```
+
+```{r}
+barplot(top_users$total_tweets, main = "total tweets of top users", ylab = "tweets", xlab = "user")
+```
+
+```{r}
+barplot(top_users$total_tags, main = "total tags used by top users", ylab = "tags", xlab = "user")
+```
+
+```{r}
+barplot(top_users$ave_tags, main = "average tags per tweet of top users", ylab = "tags/tweet", xlab = "user")
+```
+
+Individual words tweeted by the top users will now be analyzed.
+The top 6 words will be shown
+
+```{r}
+top_user_words <- main[main$username %in% top_users$username] %>% select(username, tweet)
+top_user_words <- unlist(strsplit(top_user_words$tweet," "))
+top_user_words <- plyr::count(top_user_words)
+top_user_words <- top_user_words[order(-top_user_words$freq),]
+head(top_user_words)
+```
+
+The top row for double spaces within tweets will be removed
+
+```{r}
+top_user_words <- top_user_words[-c(1),]
+head(top_user_words)
+```
+
+A word cloud for the top users will now be built
+
+```{r}
+wordcloud(words = top_user_words$x, freq = top_user_words$freq, max.words = 75, random.order = FALSE, rot.per = 0.35, colors = brewer.pal(8, "Dark2"))
+```
+
+It is worth noting that the link appearing in the word cloud leads to a California Department of Public Health page for finding open vaccine appointments
+
+This will now be compared to a random sample of all tweets
+
+```{r}
+set.seed(123)
+rand_tweets <- sample(main$tweet, 100000) 
+rand_tweets <- unlist(strsplit(rand_tweets," "))
+rand_tweets <- plyr::count(rand_tweets)
+rand_tweets <- rand_tweets[order(-rand_tweets$freq),]
+rand_tweets <- rand_tweets[-c(2),]
+head(rand_tweets,25)
+```
+
+As can be expected, the most frequent words in the random sample for all tweets are filler words that have no meaning by themselves.
+
+This is different from the most frequent words tweeted by the top tweeters in that the top tweeter's most frequent words had a clear subject without the need to look at further context clues.
+
+Lastly this process will be completed for the tweets by the users with the most hashtags per tweet.
+
+```{r}
+top_ave_tags_words <- main[main$username %in% top_ave_tags$username] %>% select(username, tweet)
+top_ave_tags_words <- unlist(strsplit(top_ave_tags_words$tweet," "))
+top_ave_tags_words <- plyr::count(top_ave_tags_words)
+top_ave_tags_words <- top_ave_tags_words[order(-top_ave_tags_words$freq),]
+# deleting row for space freq
+top_ave_tags_words <- top_ave_tags_words[-c(1),]
+# we wish to look at words instead of hashtags again so all rows for tag frequency will be deleted
+top_ave_tags_words <- top_ave_tags_words[!grepl("#", top_ave_tags_words$x),]
+# deleting row for comma freq
+top_ave_tags_words <- top_ave_tags_words[-c(1),]
+head(top_ave_tags_words,25)
+```
+
+```{r}
+wordcloud(words = top_ave_tags_words$x, freq = top_ave_tags_words$freq, max.words = 75, random.order = FALSE, rot.per = 0.35, colors = brewer.pal(8, "Dark2"))
+```
+
+### Sentiment
+
+The sentiment of the top users will now be measured using the sentiments corpus. A preview of the corpus will be shown below.
+
+```{r}
+sentiments <- as.data.table(sentiments)
+head(sentiments)
+```
+
+The corpus will be used to analyze the words with positive and negative sentiment in the tweets by the top users.
+
+```{r}
+colnames(top_user_words) <- c("word", "freq")
+top_user_sent <- merge(top_user_words, sentiments, by = "word")
+head(top_user_sent[order(-top_user_sent$freq),])
+```
+
+Positive and negative word clouds for this data will be shown.
+
+```{r}
+wordcloud(words = top_user_sent$word[top_user_sent$sentiment == "positive"], freq = top_user_sent$freq[top_user_sent$sentiment == "positive"], max.words = 100, random.order = FALSE, rot.per = 0.35, scale = c(2,1), colors = brewer.pal(8, "Dark2"))
+```
+
+```{r}
+wordcloud(words = top_user_sent$word[top_user_sent$sentiment == "negative"], freq = top_user_sent$freq[top_user_sent$sentiment == "negative"], max.words = 75, random.order = FALSE, rot.per = 0.35, scale = c(2,1), colors = brewer.pal(8, "Dark2"))
+```
+
+The sum of all positive words are:
+
+```{r}
+sum(top_user_sent$freq[top_user_sent$sentiment == "positive"])
+```
+
+The sum of all negative words are:
+
+```{r}
+sum(top_user_sent$freq[top_user_sent$sentiment == "negative"])
+```
+
+There are 18048 more positive words than negative
+
+The same full process will now be completed for the top hashtag users and the results will appear in the same order
+
+```{r}
+colnames(top_ave_tags_words) <- c("word", "freq")
+top_ave_tags_sent <- merge(top_ave_tags_words, sentiments, by = "word")
+head(top_ave_tags_sent[order(-top_ave_tags_sent$freq),])
+```
+
+```{r}
+wordcloud(words = top_ave_tags_sent$word[top_ave_tags_sent$sentiment == "positive"], freq = top_user_sent$freq[top_user_sent$sentiment == "positive"], max.words = 100, random.order = FALSE, rot.per = 0.35, scale = c(2,1.5), colors = brewer.pal(8, "Dark2"))
+```
+
+```{r}
+wordcloud(words = top_ave_tags_sent$word[top_ave_tags_sent$sentiment == "negative"], freq = top_user_sent$freq[top_user_sent$sentiment == "negative"], max.words = 100, random.order = FALSE, rot.per = 0.35, scale = c(4,2), colors = brewer.pal(8, "Dark2"))
+```
+
+```{r}
+sum(top_ave_tags_sent$freq[top_ave_tags_sent$sentiment == "positive"])
+```
+
+```{r}
+sum(top_ave_tags_sent$freq[top_ave_tags_sent$sentiment == "negative"])
+```
+
+In this group there are 116 more positive words than negative.
+
+This process will now be completed for the random sample.
+
+```{r}
+colnames(rand_tweets) <- c("word", "freq")
+rand_tweets <- merge(rand_tweets, sentiments, by = "word")
+head(rand_tweets[order(-rand_tweets$freq),])
+```
+
+```{r}
+wordcloud(words = rand_tweets$word[rand_tweets$sentiment == "positive"], freq = rand_tweets$freq[rand_tweets$sentiment == "positive"], max.words = 200, random.order = FALSE, rot.per = 0.35, colors = brewer.pal(8, "Dark2"))
+```
+
+```{r}
+wordcloud(words = rand_tweets$word[rand_tweets$sentiment == "negative"], freq = rand_tweets$freq[rand_tweets$sentiment == "positive"], max.words = 200, random.order = FALSE, rot.per = 0.35, colors = brewer.pal(8, "Dark2"))
+```
+
+```{r}
+sum(rand_tweets$freq[rand_tweets$sentiment == "positive"])
+```
+
+```{r}
+sum(rand_tweets$freq[rand_tweets$sentiment == "negative"])
+```
+
+In the random sample there are actually 5,289 more words with negative sentiment than positive.
+
+A proportion test will be done with this result.
+The null hypothesis will be that words with negative sentiment equal 50% of significant words.
+The alternate hypothesis will be that words with a negative sentiment score do not equal 50% of significant words.
+
+$$
+where\ p = {{N_{negative}}\over{N}} \\
+H_0:\quad p = .5 \\
+H_a:\quad p \neq .5
+$$
+
+```{r}
+prop.test(sum(rand_tweets$freq[rand_tweets$sentiment == "negative"]), sum(rand_tweets$freq))
+```
+
+This shows that we can be 95% confident that of all the significant words in the tweets containing the word vaccine since January 1, 2020, between approximately 52.28% and 52.9% are words with negative connotation.
+Thus we can reject the null hypothesis and accept the alternate hypothesis that words with negative sentiment score make up greater or less that 50% of the significant words
+
+This shows a significant difference in the general population of people who tweet the word vaccine and the most frequent tweeters. The most frequent tweeters only had approximately 12.48% of their words score as negative.
+It is also worth remembering that the top users were mostly bots.
+The difference will be demonstrated below in a two-sample proportion test.
+The hypothesis is as follows.
+
+$$
+where\ p_1 = {{sample\ negative\ words}\over{sample\ total}} \quad and\ p_2 = {{top\ user\ negative\ words}\over{top\ user\ total}} \\
+H_0:\quad p_1 = p_2 \\
+H_a:\quad p_1 \neq p_2
+$$
+
+```{r}
+prop.test(x = c(sum(rand_tweets$freq[rand_tweets$sentiment == "negative"]), sum(top_user_sent$freq[top_user_sent$sentiment == "negative"])), n = c(sum(rand_tweets$freq), sum(top_user_sent$freq)))
+```
+
+These results reveal that the null hypothesis will be rejected. 
+There is a confidence of 95% that the difference in the ratio of negative words to all significant words of the general population and the negative words to all significant words of the top 25 users is .396 to .406, or 39.6% to 40.6%.
+
+There is also a small difference in the general population and the top 100 users who use the most hashtags per tweet. This group of users had a negative word percentage of roughly 38.89% verses the 52.28% to 52.9% for all users.
+A two-sample test will now be completed with this as well.
+
+$$
+where\ p_1 = {{sample\ negative\ words}\over{sample\ total}} \quad and\ p_2 = {{top\ tagger\ negative\ words}\over{top\ tagger\ total}} \\
+H_0:\quad p_1 = p_2 \\
+H_a:\quad p_1 \neq p_2
+$$
+
+```{r}
+prop.test(x = c(sum(rand_tweets$freq[rand_tweets$sentiment == "negative"]), sum(top_ave_tags_sent$freq[top_ave_tags_sent$sentiment == "negative"])), n = c(sum(rand_tweets$freq), sum(top_ave_tags_sent$freq)))
+```
+
+Here the null hypothesis will also be rejected but with a broader 95% confidence interval.
+the 95% confidence interval for the difference in the ratio of negative words to total for the general population and that of the 100 top hashtag users is .094 to .1799 or 9.4% to 17.99%.
+
+These results further show that the sentiment score for individual words used in conjunction with "vaccine" is significantly more negative in the general population of twitter users that have tweeted the word vaccine than in the top most frequent tweeters and taggers of the same metric.
+
+This does not take into account users that have not tweeted the word vaccine since January 1st, 2020 or non-english speaking users.
+Further, tweets with more negative words aren't necessarily negative about the vaccine in particular, but might be negative in a more general sense.
+This simply offers an overview of the overall sentiment of tweets containing the word vaccine.
+
+The computing for this project was performed at the ORU Research Computing and Analytics facility (ORCA) at Oral Roberts University
+
+This research was funded by the Oklahoma IDeA Network of Biomedical Research Excellence.
